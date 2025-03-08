@@ -1,9 +1,8 @@
 // src/bot.js
 const TelegramApi = require("node-telegram-bot-api");
-const { Sequelize, Op } = require("sequelize");
+const express = require("express");
 const token = process.env.BOT_TOKEN;
 const bot = new TelegramApi(token, { polling: true });
-
 
 const { handleFagCommand } = require("./commands/pidor");
 const { handleRegCommand } = require("./commands/reg");
@@ -28,7 +27,6 @@ const start = () => {
     const text = msg.text;
     const chatType = msg.chat.type;
     const botName = await bot.getMe();
-
 
     // const isBotCommand =  text?.includes('/');
 
@@ -78,4 +76,13 @@ const start = () => {
   });
 };
 
+const app = express();
+const PORT = process.env.PORT || 3000;
+app.get("/", (req, res) => {
+  res.send("OK");
+});
+
+app.listen(PORT, () => {
+  console.log(`PORT = ${PORT}`)
+})
 module.exports = { start };
