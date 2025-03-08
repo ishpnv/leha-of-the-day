@@ -3,7 +3,7 @@ const TelegramApi = require("node-telegram-bot-api");
 const { Sequelize, Op } = require("sequelize");
 const token = process.env.BOT_TOKEN;
 const bot = new TelegramApi(token, { polling: true });
-const models = require("../models");
+
 
 const { handleFagCommand } = require("./commands/pidor");
 const { handleRegCommand } = require("./commands/reg");

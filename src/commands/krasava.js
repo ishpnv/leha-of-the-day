@@ -31,9 +31,9 @@ const handleKrasavaCommand = async (chatId, user, bot) => {
         const user = await models.User.findOne({
           where: { telegramId: dailyKrasava.userId },
         });
-        const message = `Сегодня 🎉красавчик дня - ${user.firstName} (@${
-          user.username || ""
-        })`;
+        const username = user.username ? `(@${user.username})` : "";
+
+        const message = `Сегодня 🎉красавчик дня - ${user.firstName} ${user}`;
         await bot.sendMessage(chatId, message);
         return;
       }
@@ -100,14 +100,14 @@ const handleKrasavaCommand = async (chatId, user, bot) => {
       where: { telegramId: krasavaOfTheDay.userId },
     });
 
+    const username = user2.username ? `(@${user2.username})` : "";
+
     const krasavaMessages = [
       "*МУЗЫКА ИЗ ПОЛЕ ЧУДЕС* 🎹",
       "КРУТИТЕ БАРАБАН 🛞",
       "СЕКТОР КРАСАВЧИК НА БАРАБАНЕ 👨",
       "ПРИЗ - ААААААВТОМОБИЛЬ 🏎️",
-      `Сегодня 🎉красавчик дня - ${user2.firstName} (@${
-        user2.username || ""
-      })`,
+      `Сегодня 🎉красавчик дня - ${user2.firstName} ${username}`,
     ];
 
     const sendMessagesWithDelay = async () => {

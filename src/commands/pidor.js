@@ -16,9 +16,10 @@ const handleFagCommand = async (chatId, user, bot) => {
         const user = await models.User.findOne({
           where: { telegramId: dailyFag.userId },
         });
-        const message = `Сегодня 🌈ПИДОР дня - ${user.firstName} ${
-          user.username ? `(@${user.username})` : ""
-        })`;
+
+        const username = user.username ? `(@${user.username})` : "";
+
+        const message = `Сегодня 🌈ПИДОР дня - ${user.firstName} ${username}`;
         await bot.sendMessage(chatId, message);
         return;
       }
@@ -100,6 +101,7 @@ const handleFagCommand = async (chatId, user, bot) => {
     const user2 = await models.User.findOne({
       where: { telegramId: faggotOfTheDay.userId },
     });
+    const username = user2.username ? `(@${user2.username})` : "";
 
     const pidorMessages = [
       "ХУЙ 🚀",
@@ -107,7 +109,7 @@ const handleFagCommand = async (chatId, user, bot) => {
       "ВЫБИРАЕМ 🎲",
       "ПИДОРА 🌈",
       "ДНЯ 🌞",
-      `Сегодня 🌈ПИДОР дня - ${user2.firstName} (@${user2.username || ""})`,
+      `Сегодня 🌈ПИДОР дня - ${user2.firstName} ${username}`,
     ];
 
     const sendMessagesWithDelay = async () => {
