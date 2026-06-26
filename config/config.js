@@ -21,11 +21,20 @@ module.exports = {
     database: process.env.DB_NAME,
     host: process.env.DB_HOST,
     dialect: 'postgres',
-    dialectOptions: {
-      ssl: {
-        require: true,
-        rejectUnauthorized: false,
-      },
-    }
+    // SSL включаем только если DB_SSL=true (нужно для managed-баз).
+    // Для локального Postgres в Docker на ВМ SSL не нужен — оставьте DB_SSL пустым.
+    ...(process.env.DB_SSL === 'true'
+      ? {
+          dialectOptions: {
+            ssl: {
+              require: true,
+              // У managed-баз бывает самоподписанный сертификат — тогда оставьте
+              // DB_SSL_REJECT_UNAUTHORIZED пустым. Если есть валидный CA — true.
+              rejectUnauthorized:
+                process.env.DB_SSL_REJECT_UNAUTHORIZED === 'true',
+            },
+          },
+        }
+      : {}),
   },
 };

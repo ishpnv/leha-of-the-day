@@ -1,124 +1,106 @@
 const models = require("../../models");
+const { withChatLock } = require("../lib/chat-lock");
+const { isToday } = require("../lib/date");
 
 const handleKrasavaCommand = async (chatId, user, bot) => {
   try {
-    // Проверяем, выбран ли пидор дня сегодня
-    const dailyFag = await models.Daily.findOne({
-      where: { chatId, role: "fag" },
-    });
+    // Критическая секция под блокировкой по чату
+    const result = await withChatLock(chatId, async (transaction) => {
+      // Красавчика можно выбирать только после пидора дня
+      const dailyFag = await models.Daily.findOne({
+        where: { chatId, role: "fag" },
+        transaction,
+      });
+      const fagSelectedToday = dailyFag && isToday(dailyFag.updatedAt);
 
-    let fagSelectedToday = false;
+      const dailyKrasava = await models.Daily.findOne({
+        where: { chatId, role: "krasava" },
+        transaction,
+      });
 
-    if (dailyFag) {
-      const lastUpdate = new Date(dailyFag.updatedAt);
-      const isSameDay = lastUpdate.toDateString() === new Date().toDateString();
-
-      if (isSameDay) {
-        fagSelectedToday = true;
+      if (dailyKrasava && isToday(dailyKrasava.updatedAt)) {
+        return { status: "already", userId: dailyKrasava.userId };
       }
-    }
 
-    // Проверяем, выбран ли уже красавчик дня сегодня
-    const dailyKrasava = await models.Daily.findOne({
-      where: { chatId, role: "krasava" },
-    });
+      // Активные кандидаты на роль "krasava"
+      let stats = await models.Statistics.findAll({
+        where: { chatId, role: "krasava", isActive: true },
+        transaction,
+      });
 
-    if (dailyKrasava) {
-      const lastUpdate = new Date(dailyKrasava.updatedAt);
-      const isSameDay = lastUpdate.toDateString() === new Date().toDateString();
-
-      if (isSameDay) {
-        const user = await models.User.findOne({
-          where: { telegramId: dailyKrasava.userId },
-        });
-        const username = user.username ? `(@${user.username})` : "";
-
-        const message = `Сегодня 🎉красавчик дня - ${user.firstName} ${user}`;
-        await bot.sendMessage(chatId, message);
-        return;
+      if (stats.length === 0) {
+        return { status: "empty" };
       }
-    }
 
-    // Получаем список зарегистрированных пользователей
-    let stats = await models.Statistics.findAll({
-      where: {
-        chatId: chatId,
-        role: "krasava",
-        isActive: true, // Учитываем только активных пользователей
-      },
+      if (!fagSelectedToday) {
+        return { status: "no_fag" };
+      }
+
+      // Исключаем пидора дня из кандидатов
+      stats = stats.filter((el) => el.userId !== dailyFag.userId);
+
+      if (stats.length === 0) {
+        return { status: "empty_after_filter" };
+      }
+
+      // Выбираем случайного кандидата и увеличиваем его счётчик
+      const chosen = stats[Math.floor(Math.random() * stats.length)];
+      await chosen.increment({ score: 1 }, { transaction });
+
+      // Фиксируем выбор дня
+      await models.Daily.upsert(
+        { userId: chosen.userId, chatId, role: "krasava", updatedAt: new Date() },
+        { transaction }
+      );
+
+      return { status: "chosen", userId: chosen.userId };
     });
 
-    if (stats.length === 0) {
+    // --- Дальше работа с Telegram, уже вне транзакции и блокировки ---
+
+    if (result.status === "empty") {
       await bot.sendMessage(chatId, "Пока никто не зарегистрировался.");
       return;
     }
 
-    if (!fagSelectedToday) {
-      const message = "Сначала выбери пидора дня, ссыкло ебаное";
-      await bot.sendMessage(chatId, message);
+    if (result.status === "no_fag") {
+      await bot.sendMessage(chatId, "Сначала выбери пидора дня, ссыкло ебаное");
       return;
     }
 
-    // Исключаем пидора дня из списка кандидатов
-    stats = stats.filter((el) => el.userId !== dailyFag.userId);
-
-    // Выбираем случайного пользователя
-    let krasavaOfTheDay = stats[Math.floor(Math.random() * stats.length)];
-
-    // Проверяем, есть ли уже запись в Statistics для данного пользователя, чата и роли "krasava"
-    let krasavaStat = await models.Statistics.findOne({
-      where: {
-        userId: krasavaOfTheDay.userId,
+    if (result.status === "empty_after_filter") {
+      await bot.sendMessage(
         chatId,
-        role: "krasava",
-      },
-    });
-
-    if (!krasavaStat) {
-      // Создаем новую запись Statistics для роли "krasava"
-      krasavaStat = await models.Statistics.create({
-        userId: krasavaOfTheDay.userId,
-        chatId,
-        role: "krasava",
-        score: 1,
-      });
-    } else {
-      // Увеличиваем счетчик
-      await krasavaStat.increment({ score: 1 });
+        "Некого выбрать: единственный активный игрок уже пидор дня."
+      );
+      return;
     }
 
-    // Обновляем или создаем запись в таблице Daily
-    await models.Daily.upsert({
-      userId: krasavaOfTheDay.userId,
-      chatId,
-      role: "krasava",
-      updatedAt: new Date(),
+    const dbUser = await models.User.findOne({
+      where: { telegramId: result.userId },
     });
+    const username = dbUser.username ? `(@${dbUser.username})` : "";
 
-    // Отправляем сообщение в чат
-    const user2 = await models.User.findOne({
-      where: { telegramId: krasavaOfTheDay.userId },
-    });
-
-    const username = user2.username ? `(@${user2.username})` : "";
+    if (result.status === "already") {
+      await bot.sendMessage(
+        chatId,
+        `Сегодня 🎉красавчик дня - ${dbUser.firstName} ${username}`
+      );
+      return;
+    }
 
     const krasavaMessages = [
       "*МУЗЫКА ИЗ ПОЛЕ ЧУДЕС* 🎹",
       "КРУТИТЕ БАРАБАН 🛞",
       "СЕКТОР КРАСАВЧИК НА БАРАБАНЕ 👨",
       "ПРИЗ - ААААААВТОМОБИЛЬ 🏎️",
-      `Сегодня 🎉красавчик дня - ${user2.firstName} ${username}`,
+      `Сегодня 🎉красавчик дня - ${dbUser.firstName} ${username}`,
     ];
 
-    const sendMessagesWithDelay = async () => {
-      for (const message of krasavaMessages) {
-        await bot.sendMessage(chatId, message);
-        // Задержка перед отправкой следующего сообщения
-        await new Promise((resolve) => setTimeout(resolve, 1000)); // 1.5 секунды
-      }
-    };
-
-    sendMessagesWithDelay();
+    for (const message of krasavaMessages) {
+      await bot.sendMessage(chatId, message);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
   } catch (error) {
     console.error("Ошибка при обработке /krasava:", error);
     await bot.sendMessage(

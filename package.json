@@ -1,15 +1,22 @@
 {
   "name": "leha-of-the-day",
   "version": "1.0.0",
-  "description": "",
+  "description": "Telegram-бот «Пидор / Красавчик дня» для групповых чатов",
   "main": "index.js",
   "scripts": {
     "dev": "nodemon index.js",
-    "start": "npx sequelize-cli db:migrate && node index.js"
+    "start": "npx sequelize-cli db:migrate && node index.js",
+    "lint": "eslint .",
+    "format": "prettier --write \"**/*.{js,json,md}\""
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "devDependencies": {
+    "@eslint/js": "^9.13.0",
+    "eslint": "^9.13.0",
+    "prettier": "^3.3.3"
+  },
   "dependencies": {
     "dotenv": "^16.4.5",
     "express": "^4.21.2",

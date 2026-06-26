@@ -12,6 +12,7 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.BIGINT,
         allowNull: false,
         unique: true,
+        primaryKey: true,
       },
       chatType: DataTypes.STRING(20),
       chatTitle: DataTypes.STRING(100),

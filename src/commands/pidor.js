@@ -1,40 +1,61 @@
 const models = require("../../models");
+const { withChatLock } = require("../lib/chat-lock");
+const { isToday } = require("../lib/date");
 
 const handleFagCommand = async (chatId, user, bot) => {
   try {
-    // Проверяем, выбран ли пидор дня сегодня
-    const dailyFag = await models.Daily.findOne({
-      where: { chatId, role: "fag" },
-    });
+    // Критическая секция под блокировкой по чату: проверяем, не выбран ли
+    // пидор уже сегодня, и если нет — атомарно выбираем и фиксируем.
+    const result = await withChatLock(chatId, async (transaction) => {
+      const dailyFag = await models.Daily.findOne({
+        where: { chatId, role: "fag" },
+        transaction,
+      });
 
-    if (dailyFag) {
-      const lastUpdate = new Date(dailyFag.updatedAt);
-      const isSameDay = lastUpdate.toDateString() === new Date().toDateString();
-
-      if (isSameDay) {
-        // Уже выбран сегодня
-        const user = await models.User.findOne({
-          where: { telegramId: dailyFag.userId },
-        });
-
-        const username = user.username ? `(@${user.username})` : "";
-
-        const message = `Сегодня 🌈ПИДОР дня - ${user.firstName} ${username}`;
-        await bot.sendMessage(chatId, message);
-        return;
+      if (dailyFag && isToday(dailyFag.updatedAt)) {
+        return { status: "already", userId: dailyFag.userId };
       }
-    }
 
-    // Получаем список зарегистрированных пользователей
-    let stats = await models.Statistics.findAll({
-      where: {
-        chatId: chatId,
-        role: "fag",
-        isActive: true, // Учитываем только активных пользователей
-      },
+      // Активные кандидаты на роль "fag"
+      let stats = await models.Statistics.findAll({
+        where: { chatId, role: "fag", isActive: true },
+        transaction,
+      });
+
+      if (stats.length === 0) {
+        return { status: "empty" };
+      }
+
+      // Исключаем красавчика дня, если он уже выбран сегодня
+      const dailyKrasava = await models.Daily.findOne({
+        where: { chatId, role: "krasava" },
+        transaction,
+      });
+
+      if (dailyKrasava && isToday(dailyKrasava.updatedAt)) {
+        stats = stats.filter((el) => el.userId !== dailyKrasava.userId);
+      }
+
+      if (stats.length === 0) {
+        return { status: "empty_after_filter" };
+      }
+
+      // Выбираем случайного кандидата и увеличиваем его счётчик
+      const chosen = stats[Math.floor(Math.random() * stats.length)];
+      await chosen.increment({ score: 1 }, { transaction });
+
+      // Фиксируем выбор дня
+      await models.Daily.upsert(
+        { userId: chosen.userId, chatId, role: "fag", updatedAt: new Date() },
+        { transaction }
+      );
+
+      return { status: "chosen", userId: chosen.userId };
     });
 
-    if (stats.length === 0) {
+    // --- Дальше работа с Telegram, уже вне транзакции и блокировки ---
+
+    if (result.status === "empty") {
       await bot.sendMessage(
         chatId,
         "В этом чате пока нет пользователей для выбора."
@@ -42,66 +63,26 @@ const handleFagCommand = async (chatId, user, bot) => {
       return;
     }
 
-    // Исключаем "красавчика дня" из списка кандидатов, если он уже выбран сегодня
-    const dailyKrasava = await models.Daily.findOne({
-      where: { chatId, role: "krasava" },
-    });
-
-    let krasavaSelectedToday = false;
-    let krasavaUserId = null;
-
-    if (dailyKrasava) {
-      const lastUpdate = new Date(dailyKrasava.updatedAt);
-      const isSameDay = lastUpdate.toDateString() === new Date().toDateString();
-
-      if (isSameDay) {
-        krasavaSelectedToday = true;
-        krasavaUserId = dailyKrasava.userId;
-      }
-    }
-
-    if (krasavaSelectedToday) {
-      stats = stats.filter((el) => el.userId !== krasavaUserId);
-    }
-
-    // Выбираем случайного пользователя
-    let faggotOfTheDay = stats[Math.floor(Math.random() * stats.length)];
-
-    // Проверяем, есть ли уже запись в Statistics для данного пользователя, чата и роли "fag"
-    let fagStat = await models.Statistics.findOne({
-      where: {
-        userId: faggotOfTheDay.userId,
+    if (result.status === "empty_after_filter") {
+      await bot.sendMessage(
         chatId,
-        role: "fag",
-      },
-    });
-
-    if (!fagStat) {
-      // Создаем новую запись Statistics для роли "fag"
-      fagStat = await models.Statistics.create({
-        userId: faggotOfTheDay.userId,
-        chatId,
-        role: "fag",
-        score: 1,
-      });
-    } else {
-      // Увеличиваем счетчик
-      await fagStat.increment({ score: 1 });
+        "Некого выбрать: единственный активный игрок уже красавчик дня."
+      );
+      return;
     }
 
-    // Обновляем или создаем запись в таблице Daily
-    await models.Daily.upsert({
-      userId: faggotOfTheDay.userId,
-      chatId,
-      role: "fag",
-      updatedAt: new Date(),
+    const dbUser = await models.User.findOne({
+      where: { telegramId: result.userId },
     });
+    const username = dbUser.username ? `(@${dbUser.username})` : "";
 
-    // Отправляем сообщение в чат
-    const user2 = await models.User.findOne({
-      where: { telegramId: faggotOfTheDay.userId },
-    });
-    const username = user2.username ? `(@${user2.username})` : "";
+    if (result.status === "already") {
+      await bot.sendMessage(
+        chatId,
+        `Сегодня 🌈ПИДОР дня - ${dbUser.firstName} ${username}`
+      );
+      return;
+    }
 
     const pidorMessages = [
       "ХУЙ 🚀",
@@ -109,18 +90,13 @@ const handleFagCommand = async (chatId, user, bot) => {
       "ВЫБИРАЕМ 🎲",
       "ПИДОРА 🌈",
       "ДНЯ 🌞",
-      `Сегодня 🌈ПИДОР дня - ${user2.firstName} ${username}`,
+      `Сегодня 🌈ПИДОР дня - ${dbUser.firstName} ${username}`,
     ];
 
-    const sendMessagesWithDelay = async () => {
-      for (const message of pidorMessages) {
-        await bot.sendMessage(chatId, message);
-        // Задержка перед отправкой следующего сообщения
-        await new Promise((resolve) => setTimeout(resolve, 1000)); // 1.5 секунды
-      }
-    };
-
-    sendMessagesWithDelay();
+    for (const message of pidorMessages) {
+      await bot.sendMessage(chatId, message);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
   } catch (error) {
     console.error("Ошибка при обработке /pidor:", error);
     await bot.sendMessage(chatId, "Произошла ошибка при выборе пидора дня.");

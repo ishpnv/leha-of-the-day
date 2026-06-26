@@ -1,6 +1,7 @@
 // src/bot.js
 const TelegramApi = require("node-telegram-bot-api");
 const express = require("express");
+const models = require("../models");
 const token = process.env.BOT_TOKEN;
 const bot = new TelegramApi(token, { polling: true });
 
@@ -19,55 +20,72 @@ bot.setMyCommands([
   { command: "/stats", description: "Посмотреть статистику" },
 ]);
 
-// Функция для запуска бота
-const start = () => {
-  bot.on("message", async (msg) => {
-    const chatId = msg.chat.id;
-    const user = msg.from;
-    const text = msg.text;
-    const chatType = msg.chat.type;
-    const botName = await bot.getMe();
-
-    // const isBotCommand =  text?.includes('/');
-
-    // // Если сообщение не является командой, игнорируем его
-    // if (!isBotCommand) {
-    //   return;
-    // }
-
-    // const now = new Date();
-    // const currentHour = now.getHours();
-    // // Проверяем, находится ли время между 0:00 и 12:00
-    // if (currentHour >= 0 && currentHour < 19) {
-    //   // Отправляем предупреждение и не выполняем команду
-    //   await bot.sendMessage(
-    //     chatId,
-    //     `${user.first_name}, нельзя использовать команды бота с 0:00 до 12:00. Лови банхаммер)))`
-    //   );
-
-    //   await bot.restrictChatMember(chatId, user.id, {
-    //     permissions: {
-    //       can_send_messages: false,
-    //       can_send_media_messages: false,
-    //       can_send_polls: false,
-    //       can_send_other_messages: false,
-    //     },
-    //   });
-    //   return;
-    // }
-
-    if (text === "/reg" || text === `/reg@${botName.username}`) {
-      await handleRegCommand(chatId, user, chatType, bot);
-    } else if (text === "/stats" || text === `/stats@${botName.username}`) {
-      await handleStatsCommand(chatId, bot);
-    } else if (text === "/pidor" || text === `/pidor@${botName.username}`) {
-      await handleFagCommand(chatId, user, bot);
-    } else if (text === "/krasava" || text === `/krasava@${botName.username}`) {
-      await handleKrasavaCommand(chatId, user, bot);
-    } else if (text === "/delete" || text === `/delete@${botName.username}`) {
-      await handleDeleteCommand(chatId, user, bot);
-    } else {
+// Проверяем подключение к БД с ретраями: на старте контейнера/ВМ база может
+// быть ещё не готова, не падаем сразу, а ждём.
+const connectToDatabase = async (retries = 10, delayMs = 3000) => {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      await models.sequelize.authenticate();
+      console.log("БД подключена");
       return;
+    } catch (error) {
+      console.error(
+        `Не удалось подключиться к БД (попытка ${attempt}/${retries}): ${error.message}`
+      );
+      if (attempt === retries) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+};
+
+// Функция для запуска бота
+const start = async () => {
+  await connectToDatabase();
+
+  // Имя бота нужно получить один раз при старте, а не на каждое сообщение
+  const me = await bot.getMe();
+  const botUsername = me.username;
+
+  // Таблица команд: имя -> обработчик. Каждый обработчик получает контекст сообщения.
+  const commands = {
+    "/reg": ({ chatId, user, chatType, chatTitle }) =>
+      handleRegCommand(chatId, user, chatType, chatTitle, bot),
+    "/stats": ({ chatId }) => handleStatsCommand(chatId, bot),
+    "/pidor": ({ chatId, user }) => handleFagCommand(chatId, user, bot),
+    "/krasava": ({ chatId, user }) => handleKrasavaCommand(chatId, user, bot),
+    "/delete": ({ chatId, user }) => handleDeleteCommand(chatId, user, bot),
+  };
+
+  bot.on("message", async (msg) => {
+    const text = msg.text;
+    // Игнорируем нетекстовые сообщения (фото, стикеры, сервисные события)
+    if (!text) return;
+
+    // Поддерживаем как "/pidor", так и "/pidor@botusername" в группах
+    const command = text.split("@")[0];
+    const handler = commands[command];
+    if (!handler) return;
+
+    // Если указан адресат команды, он должен совпадать с именем нашего бота
+    const mention = text.includes("@") ? text.split("@")[1] : null;
+    if (mention && mention !== botUsername) return;
+
+    try {
+      // Для групп есть chat.title, для личных чатов — нет, берём имя собеседника
+      const chatTitle =
+        msg.chat.title ||
+        [msg.from.first_name, msg.from.last_name].filter(Boolean).join(" ") ||
+        msg.from.username ||
+        "";
+
+      await handler({
+        chatId: msg.chat.id,
+        user: msg.from,
+        chatType: msg.chat.type,
+        chatTitle,
+      });
+    } catch (error) {
+      console.error(`Ошибка при обработке команды ${command}:`, error);
     }
   });
 
@@ -83,6 +101,23 @@ app.get("/", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`PORT = ${PORT}`)
-})
-module.exports = { start };
+  console.log(`PORT = ${PORT}`);
+});
+
+// Корректная остановка: останавливаем polling (иначе Telegram вернёт 409
+// conflict при следующем запуске) и закрываем соединение с БД.
+const stop = async () => {
+  console.log("Останавливаю бота...");
+  try {
+    await bot.stopPolling();
+  } catch (error) {
+    console.error("Ошибка при остановке polling:", error.message);
+  }
+  try {
+    await models.sequelize.close();
+  } catch (error) {
+    console.error("Ошибка при закрытии соединения с БД:", error.message);
+  }
+};
+
+module.exports = { start, stop };

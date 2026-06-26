@@ -1,10 +1,10 @@
 // src/commands/reg.js
 const models = require("../../models");
 
-const handleRegCommand = async (chatId, user, chatType, bot) => {
+const handleRegCommand = async (chatId, user, chatType, chatTitle, bot) => {
   try {
     // Находим или создаём пользователя
-    const [dbUser] = await models.User.findOrCreate({
+    const [dbUser, createdUser] = await models.User.findOrCreate({
       where: { telegramId: user.id },
       defaults: {
         username: user.username || "",
@@ -13,14 +13,28 @@ const handleRegCommand = async (chatId, user, chatType, bot) => {
       },
     });
 
+    // Если профиль уже был — обновляем данные (username/имя могли измениться)
+    if (!createdUser) {
+      await dbUser.update({
+        username: user.username || "",
+        firstName: user.first_name || "",
+        lastName: user.last_name || "",
+      });
+    }
+
     // Находим или создаём чат
-    await models.Chat.findOrCreate({
+    const [dbChat, createdChat] = await models.Chat.findOrCreate({
       where: { telegramId: chatId },
       defaults: {
         chatType: chatType,
-        chatTitle: user.first_name,
+        chatTitle: chatTitle,
       },
     });
+
+    // Актуализируем данные чата (название группы могло измениться)
+    if (!createdChat) {
+      await dbChat.update({ chatType, chatTitle });
+    }
 
     // Находим статистику пользователя в этом чате
     const [statFag, createdFag] = await models.Statistics.findOrCreate({

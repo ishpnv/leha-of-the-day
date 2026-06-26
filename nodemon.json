@@ -1,5 +1,5 @@
 {
-  "watch": ["server", "config"],
+  "watch": ["src", "config", "models", "index.js"],
   "ext": "js,json",
   "ignore": ["node_modules"],
   "exec": "node index.js",
