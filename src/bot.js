@@ -3,7 +3,34 @@ const TelegramApi = require("node-telegram-bot-api");
 const express = require("express");
 const models = require("../models");
 const token = process.env.BOT_TOKEN;
-const bot = new TelegramApi(token, { polling: true });
+
+// Опциональный прокси для выхода к api.telegram.org. Нужен при хостинге в РФ,
+// где Telegram заблокирован. Формат TELEGRAM_PROXY:
+//   socks5://[user:pass@]host:port  или  http://[user:pass@]host:port
+const buildProxyAgent = () => {
+  const proxy = process.env.TELEGRAM_PROXY;
+  if (!proxy) return undefined;
+  if (proxy.startsWith("socks")) {
+    const { SocksProxyAgent } = require("socks-proxy-agent");
+    return new SocksProxyAgent(proxy);
+  }
+  const { HttpsProxyAgent } = require("https-proxy-agent");
+  return new HttpsProxyAgent(proxy);
+};
+
+const proxyAgent = buildProxyAgent();
+if (proxyAgent) {
+  // Логируем без утечки логина/пароля
+  console.log(
+    "Telegram через прокси:",
+    process.env.TELEGRAM_PROXY.replace(/\/\/[^@]+@/, "//***@")
+  );
+}
+
+const bot = new TelegramApi(token, {
+  polling: true,
+  ...(proxyAgent ? { request: { agent: proxyAgent } } : {}),
+});
 
 const { handleFagCommand } = require("./commands/pidor");
 const { handleRegCommand } = require("./commands/reg");
